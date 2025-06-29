@@ -118,40 +118,62 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // Step 1: Geocode the address to get coordinates
-      print('Step 1: Geocoding location: "${_locationController.text}"');
-      final encodedLocation = Uri.encodeComponent(_locationController.text);
-      final geocodeResponse = await http.get(
-        Uri.parse('https://api.tacobell.com/location/v1/$encodedLocation'),
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
-          'Accept': 'application/json',
-          'Referer': 'https://www.tacobell.com/',
-        },
-      );
-      print('Geocode response status: ${geocodeResponse.statusCode}');
+      double? lat;
+      double? lng;
+      final locationText = _locationController.text.trim();
 
-      if (geocodeResponse.statusCode != 200) {
-        setState(() {
-          _searchResult =
-              Text('Error geocoding location (Status: ${geocodeResponse.statusCode}).');
-        });
-        return;
+      // NEW, MORE ROBUST LOGIC:
+      // Try to parse as coordinates first. If it fails, assume it's a place name.
+      final parts = locationText.split(',');
+      if (parts.length == 2) {
+        final parsedLat = double.tryParse(parts[0].trim());
+        final parsedLng = double.tryParse(parts[1].trim());
+        if (parsedLat != null && parsedLng != null) {
+          print('Input successfully parsed as coordinates.');
+          lat = parsedLat;
+          lng = parsedLng;
+        }
       }
 
-      final geocodeData = json.decode(geocodeResponse.body);
-      print('Geocode response data: $geocodeData');
-      if (geocodeData['success'] != true || geocodeData['geometry'] == null) {
-        setState(() {
-          _searchResult = const Text('Could not find coordinates for the location.');
-        });
-        return;
+      // If lat and lng are still null, it's not valid coordinates, so geocode it.
+      if (lat == null || lng == null) {
+        print('Input is not coordinates. Geocoding location: "$locationText"');
+        final encodedLocation = Uri.encodeComponent(locationText);
+        final geocodeResponse = await http.get(
+          Uri.parse('https://api.tacobell.com/location/v1/$encodedLocation'),
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://www.tacobell.com/',
+          },
+        );
+        print('Geocode response status: ${geocodeResponse.statusCode}');
+
+        if (geocodeResponse.statusCode != 200) {
+          setState(() {
+            _searchResult = Text(
+                'Error geocoding location (Status: ${geocodeResponse.statusCode}).');
+          });
+          return;
+        }
+
+        final geocodeData = json.decode(geocodeResponse.body);
+        print('Geocode response data: $geocodeData');
+        if (geocodeData['success'] != true ||
+            geocodeData['geometry'] == null) {
+          setState(() {
+            _searchResult =
+                const Text('Could not find coordinates for the location.');
+          });
+          return;
+        }
+
+        lat = geocodeData['geometry']['lat'];
+        lng = geocodeData['geometry']['lng'];
       }
 
-      final lat = geocodeData['geometry']['lat'];
-      final lng = geocodeData['geometry']['lng'];
-      print('Coordinates found: lat=$lat, lng=$lng');
+      print('Coordinates to use: lat=$lat, lng=$lng');
 
       // Step 2: Find stores near the coordinates
       print('Step 2: Finding stores...');
