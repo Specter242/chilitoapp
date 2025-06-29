@@ -33,7 +33,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _locationController = TextEditingController();
-  String _searchResult = '';
+  Widget _searchResult = const SizedBox.shrink();
 
   Future<void> _getGpsLocation() async {
     try {
@@ -42,53 +42,79 @@ class _MyHomePageState extends State<MyHomePage> {
       _locationController.text = '${position.latitude}, ${position.longitude}';
     } catch (e) {
       setState(() {
-        _searchResult = 'Could not get location: $e';
+        _searchResult = Text('Could not get location: $e');
       });
     }
   }
 
   Future<bool> _checkUrlForChilito(String url) async {
     try {
-      final response = await http.get(Uri.parse(url));
+      print('Checking URL: $url');
+      final response = await http.get(Uri.parse(url), headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+        'Accept':
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.tacobell.com/locations',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+      });
+
       if (response.statusCode == 200) {
         final document = html.parse(response.body);
         final content = document.body?.text.toLowerCase() ?? '';
 
         final keywords = [
           'chili cheese burrito',
-          'chilito'
+          'chilito',
+          'chili burrito',
         ];
 
         for (final keyword in keywords) {
           if (content.contains(keyword)) {
+            print('Found keyword: "$keyword" in page content at $url');
             return true;
           }
         }
-
-        // Also check product names specifically
-        final productNames = document.querySelectorAll('.product-name');
-        for (final nameElement in productNames) {
-          final productName = nameElement.text.toLowerCase();
-          for (final keyword in keywords) {
-            if (productName.contains(keyword)) {
-              return true;
-            }
-          }
-        }
+        print('Keyword not found at $url.');
+      } else {
+        print('Failed to fetch $url - Status: ${response.statusCode}');
       }
     } catch (e) {
-      // Ignore errors for individual URL checks
+      print('Error checking URL $url: $e');
     }
     return false;
   }
 
+  Future<void> _testPrint() async {
+    print("--- BUTTON TEST: The Search button was definitely pressed. ---");
+  }
+
   Future<void> _search() async {
+    print('--- SEARCH BUTTON PRESSED ---');
     setState(() {
-      _searchResult = 'Searching...';
+      _searchResult = const Column(
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 10),
+          Text('Searching...'),
+        ],
+      );
     });
+
+    // Add a check for empty location
+    if (_locationController.text.trim().isEmpty) {
+      print('Search failed: Location is empty.');
+      setState(() {
+        _searchResult = const Text('Please enter a location first.');
+      });
+      return;
+    }
 
     try {
       // Step 1: Geocode the address to get coordinates
+      print('Step 1: Geocoding location: "${_locationController.text}"');
       final encodedLocation = Uri.encodeComponent(_locationController.text);
       final geocodeResponse = await http.get(
         Uri.parse('https://api.tacobell.com/location/v1/$encodedLocation'),
@@ -99,27 +125,31 @@ class _MyHomePageState extends State<MyHomePage> {
           'Referer': 'https://www.tacobell.com/',
         },
       );
+      print('Geocode response status: ${geocodeResponse.statusCode}');
 
       if (geocodeResponse.statusCode != 200) {
         setState(() {
           _searchResult =
-              'Error geocoding location (Status: ${geocodeResponse.statusCode}).';
+              Text('Error geocoding location (Status: ${geocodeResponse.statusCode}).');
         });
         return;
       }
 
       final geocodeData = json.decode(geocodeResponse.body);
+      print('Geocode response data: $geocodeData');
       if (geocodeData['success'] != true || geocodeData['geometry'] == null) {
         setState(() {
-          _searchResult = 'Could not find coordinates for the location.';
+          _searchResult = const Text('Could not find coordinates for the location.');
         });
         return;
       }
 
       final lat = geocodeData['geometry']['lat'];
       final lng = geocodeData['geometry']['lng'];
+      print('Coordinates found: lat=$lat, lng=$lng');
 
       // Step 2: Find stores near the coordinates
+      print('Step 2: Finding stores...');
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final storesResponse = await http.get(
         Uri.parse(
@@ -131,44 +161,58 @@ class _MyHomePageState extends State<MyHomePage> {
           'Referer': 'https://www.tacobell.com/locations',
         },
       );
+      print('Stores response status: ${storesResponse.statusCode}');
 
       if (storesResponse.statusCode != 200) {
         setState(() {
           _searchResult =
-              'Error finding stores (Status: ${storesResponse.statusCode}).';
+              Text('Error finding stores (Status: ${storesResponse.statusCode}).');
         });
         return;
       }
 
-      // The new endpoint returns a simple list of stores directly.
       final storesData = json.decode(storesResponse.body);
       final stores = storesData['nearByStores'] as List? ?? [];
+      print('Found ${stores.length} stores nearby.');
 
       if (stores.isEmpty) {
         setState(() {
-          _searchResult = 'No Taco Bell locations found nearby.';
+          _searchResult = const Text('No Taco Bell locations found nearby.');
         });
         return;
       }
 
       // Step 3: Check the menu for the closest 5 stores
+      print('Step 3: Checking menus...');
       for (var i = 0; i < stores.length && i < 5; i++) {
         final store = stores[i];
         if (store == null) continue;
 
-        final storeDetails = store['store'];
-        if (storeDetails == null) continue;
-
-        final storeId = storeDetails['storeNumber'];
-        final storeName = storeDetails['storeName'] ?? 'a nearby Taco Bell';
-        final address = storeDetails['contacts']?['address'];
+        // FINAL CORRECTED PARSING LOGIC:
+        final storeId = store['storeNumber'];
+        final storeName = 'Taco Bell #${store['storeNumber']}'; // Construct a better name
+        final address = store['address'];
         final String fullAddress;
-        if (address != null) {
-          fullAddress = '${address['street']}, ${address['city']}, ${address['state']} ${address['postalCode']}';
+        if (address != null && address is Map) {
+          final street = address['line1'] ?? '';
+          final city = address['town'] ?? '';
+          final regionData = address['region'];
+          String state = '';
+          if (regionData != null &&
+              regionData is Map &&
+              regionData['isocode'] != null) {
+            state = (regionData['isocode'] as String).split('-').last;
+          }
+          final postalCode = address['postalCode'] ?? '';
+          fullAddress = '$street, $city, $state $postalCode';
         } else {
           fullAddress = 'Address not available';
         }
 
+        if (storeId == null) {
+          print('Skipping a store because it has no storeNumber.');
+          continue;
+        }
 
         final urlsToCheck = [
           'https://www.tacobell.com/food/menu?store=$storeId',
@@ -176,25 +220,60 @@ class _MyHomePageState extends State<MyHomePage> {
           'https://www.tacobell.com/food/specialty?store=$storeId',
         ];
 
-        for (final url in urlsToCheck) {
+        for (int j = 0; j < urlsToCheck.length; j++) {
+          final url = urlsToCheck[j];
           if (await _checkUrlForChilito(url)) {
+            print('--- SEARCH FINISHED: Found! ---');
             setState(() {
-              _searchResult =
-                  'Taco Bell at $storeName ($fullAddress) has the Chili Cheese Burrito!';
+              _searchResult = Card(
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'YES! Found at the closest Taco Bell:',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        storeName,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 18),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        fullAddress,
+                        style: const TextStyle(fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              );
             });
             return; // Found it, so we can stop
           }
+          // Add a small delay between requests
+          await Future.delayed(const Duration(milliseconds: 250));
         }
       }
 
       // 4. If the loop completes, it wasn't found
+      print('--- SEARCH FINISHED: Not found ---');
       setState(() {
-        _searchResult = 'No Taco Bells nearby sell the chili cheese burrito.';
+        _searchResult = const Text('No Taco Bells nearby sell the chili cheese burrito.');
       });
     } catch (e) {
+      print('--- SEARCH FAILED WITH ERROR ---');
+      print(e.toString()); // This will print the actual error
       setState(() {
         _searchResult =
-            'Failed to search. Please check your connection and try again. Error: $e';
+            Text('Failed to search. Please check your connection and try again. Error: $e');
       });
     }
   }
@@ -232,13 +311,16 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
             const SizedBox(height: 8.0),
             ElevatedButton(
-              onPressed: _search,
+              onPressed: _search, // Changed back to the real search function
               child: const Text('Search'),
             ),
             const SizedBox(height: 16.0),
-            Text(
-              _searchResult,
-              textAlign: TextAlign.center,
+            Expanded(
+              child: SingleChildScrollView(
+                child: Center(
+                  child: _searchResult,
+                ),
+              ),
             ),
           ],
         ),
