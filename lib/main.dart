@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as html;
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   runApp(const MyApp());
@@ -34,6 +35,8 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _locationController = TextEditingController();
   Widget _searchResult = const SizedBox.shrink();
+  double? _foundLat;
+  double? _foundLng;
 
   Future<void> _getGpsLocation() async {
     try {
@@ -101,6 +104,8 @@ class _MyHomePageState extends State<MyHomePage> {
           Text('Searching...'),
         ],
       );
+      _foundLat = null;
+      _foundLng = null;
     });
 
     // Add a check for empty location
@@ -225,6 +230,10 @@ class _MyHomePageState extends State<MyHomePage> {
           if (await _checkUrlForChilito(url)) {
             print('--- SEARCH FINISHED: Found! ---');
             setState(() {
+              // Save the coordinates of the found store
+              _foundLat = store['geoPoint']?['latitude'];
+              _foundLng = store['geoPoint']?['longitude'];
+
               _searchResult = Card(
                 elevation: 4,
                 child: Padding(
@@ -251,6 +260,17 @@ class _MyHomePageState extends State<MyHomePage> {
                         style: const TextStyle(fontSize: 16),
                         textAlign: TextAlign.center,
                       ),
+                      const SizedBox(height: 16),
+                      if (_foundLat != null && _foundLng != null)
+                        ElevatedButton.icon(
+                          onPressed: _launchNavigation,
+                          icon: const Icon(Icons.navigation),
+                          label: const Text('Navigate'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -267,6 +287,8 @@ class _MyHomePageState extends State<MyHomePage> {
       print('--- SEARCH FINISHED: Not found ---');
       setState(() {
         _searchResult = const Text('No Taco Bells nearby sell the chili cheese burrito.');
+        _foundLat = null;
+        _foundLng = null;
       });
     } catch (e) {
       print('--- SEARCH FAILED WITH ERROR ---');
@@ -274,7 +296,22 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         _searchResult =
             Text('Failed to search. Please check your connection and try again. Error: $e');
+        _foundLat = null;
+        _foundLng = null;
       });
+    }
+  }
+
+  Future<void> _launchNavigation() async {
+    if (_foundLat != null && _foundLng != null) {
+      final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$_foundLat,$_foundLng');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        setState(() {
+          _searchResult = const Text('Could not open navigation app.');
+        });
+      }
     }
   }
 
